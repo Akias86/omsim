@@ -1,5 +1,6 @@
 #ifndef OM_VERIFIER_H
 #define OM_VERIFIER_H
+#include <stdint.h>
 
 // this "verifier" API is designed to be called from an FFI.
 
@@ -32,6 +33,24 @@ void verifier_destroy(void *verifier);
 
 // set how many cycles to wait for a solution to complete.
 void verifier_set_cycle_limit(void *verifier, int cycle_limit);
+
+void verifier_set_collision_check_limit(void *verifier, uint64_t collision_check_limit);
+
+// enable (1) or disable (0) collision detection at runtime.  when disabled,
+// the simulation never stops on collisions and the motion-phase sweep is
+// skipped (much faster, results may be wrong).  enabled by default.
+void verifier_set_collision_detection(void *verifier, int enabled);
+
+// incremental simulation API: verifier_advance() resumes the simulation from
+// its current state and runs up to additional_cycles more cycles.
+// verifier_current_cycle()/verifier_completed()/verifier_converged() report
+// the state of the persisted simulation, and verifier_measure_current()
+// evaluates per-cycle metrics at the current state without re-simulating.
+void verifier_advance(void *verifier, int additional_cycles);
+int verifier_current_cycle(void *verifier);
+int verifier_completed(void *verifier);
+int verifier_converged(void *verifier);
+double verifier_measure_current(void *verifier, const char *metric);
 
 // disable limits and let the solution run as long as possible.
 void verifier_disable_limits(void *verifier);

@@ -143,6 +143,27 @@ static void destroy_snapshot(struct snapshot *snapshot)
     free(snapshot->output_count);
 }
 
+struct steady_state_run {
+    struct snapshot snapshot;
+    uint64_t next_snapshot_cycle;
+    uint64_t snapshot_period;
+    bool disable_check_until_next_snapshot;
+    bool initialized;
+};
+
+struct steady_state_run *steady_state_run_create(void)
+{
+    return calloc(1, sizeof(struct steady_state_run));
+}
+
+void steady_state_run_destroy(struct steady_state_run *run)
+{
+    if (!run)
+        return;
+    destroy_snapshot(&run->snapshot);
+    free(run);
+}
+
 static uint64_t gcd(uint64_t a, uint64_t b)
 {
     while (b != 0) {
@@ -236,14 +257,26 @@ static double measure_quadratic_swing_area(struct chain_swing *starting_point, i
     return atan2(SQRT3_2 * delta.direction.v, delta.direction.u + 0.5 * delta.direction.v) / M_PI * length_squared * 3;
 }
 
-struct steady_state run_until_steady_state(struct solution *solution, struct board *board, uint64_t cycle_limit)
+struct steady_state run_until_steady_state(struct solution *solution, struct board *board, uint64_t cycle_limit, struct steady_state_run *run)
 {
-    struct snapshot snapshot = { 0 };
+    struct snapshot snapshot;
     uint64_t check_period = solution->tape_period;
     if (check_period == 0)
         check_period = 1;
-    uint64_t next_snapshot_cycle = check_period * (1 + (board->cycle + check_period - 1) / check_period);
-    uint64_t snapshot_period = next_snapshot_cycle;
+    uint64_t next_snapshot_cycle;
+    uint64_t snapshot_period;
+    bool disable_check_until_next_snapshot;
+    if (run && run->initialized) {
+        snapshot = run->snapshot;
+        next_snapshot_cycle = run->next_snapshot_cycle;
+        snapshot_period = run->snapshot_period;
+        disable_check_until_next_snapshot = run->disable_check_until_next_snapshot;
+    } else {
+        snapshot = (struct snapshot){ 0 };
+        next_snapshot_cycle = check_period * (1 + (board->cycle + check_period - 1) / check_period);
+        snapshot_period = next_snapshot_cycle;
+        disable_check_until_next_snapshot = true;
+    }
     for (uint32_t i = 0; i < solution->number_of_arms; ++i) {
         uint64_t start_cycle = solution->arm_tape_start_cycle[i];
         if (solution->arm_tape_halt_index[i] != SIZE_MAX)
@@ -252,7 +285,6 @@ struct steady_state run_until_steady_state(struct solution *solution, struct boa
         if (period_aligned_start_cycle > next_snapshot_cycle)
             next_snapshot_cycle = period_aligned_start_cycle;
     }
-    bool disable_check_until_next_snapshot = true;
     while (board->cycle < cycle_limit && !board->collision) {
         // printf("cycle %llu\n", board->cycle);
         if (!disable_check_until_next_snapshot && board->cycle % check_period == 0 && check_snapshot(solution, board, &snapshot)) {
@@ -487,6 +519,10 @@ struct steady_state run_until_steady_state(struct solution *solution, struct boa
             for (uint64_t i = 0; i < additional_cycles_to_run && !board->collision; ++i)
                 cycle(solution, board);
             destroy_snapshot(&snapshot);
+            if (run) {
+                run->snapshot = (struct snapshot){ 0 };
+                run->initialized = false;
+            }
             return result;
         }
         while (board->cycle > next_snapshot_cycle)
@@ -500,7 +536,14 @@ struct steady_state run_until_steady_state(struct solution *solution, struct boa
         }
         cycle(solution, board);
     }
-    destroy_snapshot(&snapshot);
+    if (run) {
+        run->snapshot = snapshot;
+        run->next_snapshot_cycle = next_snapshot_cycle;
+        run->snapshot_period = snapshot_period;
+        run->disable_check_until_next_snapshot = disable_check_until_next_snapshot;
+        run->initialized = true;
+    } else
+        destroy_snapshot(&snapshot);
     return (struct steady_state){
         .eventual_behavior = board->collision ? EVENTUALLY_STOPS_RUNNING : EVENTUALLY_REACHES_CYCLE_LIMIT,
     };

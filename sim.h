@@ -515,6 +515,15 @@ struct board {
     bool collision;
     struct vector collision_location;
     const char *collision_reason;
+    // when true, collisions are still computed by the simulation logic where
+    // unavoidable, but never reported: board->collision stays false and the
+    // expensive motion-phase sweep is skipped.  default (false) = detection on.
+    bool collision_detection_disabled;
+
+    // scratch arena for the motion-phase collider lists.  owned by the board,
+    // resized on demand by collision.c and freed by destroy().
+    void *collision_scratch;
+    size_t collision_scratch_capacity;
 
     uint32_t atom_grabs[NUMBER_OF_ATOM_TYPES];
 

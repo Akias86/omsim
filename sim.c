@@ -53,6 +53,8 @@ struct vector polymer_position_from_global_position(struct input_output *io, str
 
 static void report_collision(struct board *board, struct vector p, const char *reason)
 {
+    if (board->collision_detection_disabled)
+        return;
     // only report the first collision (after that, all bets are off).
     if (board->collision)
         return;
@@ -1349,14 +1351,16 @@ static void perform_arm_instructions(struct solution *solution, struct board *bo
                 m->base_rotation %= 6;
             }
         }
-        double collision_increment = 0.25 / pow(2, round(log(maximum_rotation_distance) / log(2)));
-        if (!(collision_increment <= 0.125))
-            collision_increment = 0.125;
-        struct vector collision_location;
-        if (collision(solution, board, (float)collision_increment, &collision_location))
-            report_collision(board, collision_location, "collision during motion phase");
-        if (board->collision_check_limit > 0 && board->collision_checks > board->collision_check_limit)
-            report_collision(board, zero_vector, "solution reached limit for maximum number of collision checks");
+        if (!board->collision_detection_disabled) {
+            double collision_increment = 0.25 / pow(2, round(log(maximum_rotation_distance) / log(2)));
+            if (!(collision_increment <= 0.125))
+                collision_increment = 0.125;
+            struct vector collision_location;
+            if (collision(solution, board, (float)collision_increment, &collision_location))
+                report_collision(board, collision_location, "collision during motion phase");
+            if (board->collision_check_limit > 0 && board->collision_checks > board->collision_check_limit)
+                report_collision(board, zero_vector, "solution reached limit for maximum number of collision checks");
+        }
         atom_index = 0;
         for (size_t i = 0; i < board->movements.length; ++i) {
             struct movement m = board->movements.movements[i];
@@ -2173,6 +2177,7 @@ void destroy(struct solution *solution, struct board *board)
         free(board->disjoint_bond_table.bonds);
         free(board->area_directions);
         free(board->molecule.atoms);
+        free(board->collision_scratch);
         memset(board, 0, sizeof(*board));
     }
 }

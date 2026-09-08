@@ -32,6 +32,14 @@ struct steady_state {
     bool pivot_parity;
 };
 
-struct steady_state run_until_steady_state(struct solution *solution, struct board *board, uint64_t cycle_limit);
+// opaque handle for resumable steady-state detection state.  created by
+// steady_state_run_create(); pass it to run_until_steady_state() to continue
+// an interrupted run from where it left off (snapshot schedule preserved).
+// pass NULL to run_until_steady_state() for a fresh one-shot run.
+struct steady_state_run;
+struct steady_state_run *steady_state_run_create(void);
+void steady_state_run_destroy(struct steady_state_run *run);
+
+struct steady_state run_until_steady_state(struct solution *solution, struct board *board, uint64_t cycle_limit, struct steady_state_run *run);
 
 #endif

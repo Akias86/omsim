@@ -126,6 +126,14 @@ struct verifier {
 
     uint64_t collision_check_limit;
     bool disable_limits;
+    bool collision_detection_disabled;
+
+    struct solution *adv_solution;
+    struct board *adv_board;
+    struct steady_state_run *adv_run;
+    bool adv_started;
+    bool adv_converged;
+    struct steady_state adv_steady;
 
     struct error error;
 };
@@ -240,6 +248,12 @@ void verifier_error_clear(void *verifier)
 void verifier_destroy(void *verifier)
 {
     struct verifier *v = verifier;
+    if (v->adv_started && v->adv_board) {
+        destroy(v->adv_solution, v->adv_board);
+        free(v->adv_solution);
+        free(v->adv_board);
+    }
+    steady_state_run_destroy(v->adv_run);
     free_puzzle_file(v->pf);
     free_solution_file(v->sf);
     verifier_wrong_output_clear(v);
@@ -253,6 +267,135 @@ void verifier_set_cycle_limit(void *verifier, int cycle_limit)
     if (cycle_limit < 0)
         cycle_limit = 0;
     v->cycle_limit = cycle_limit;
+}
+
+void verifier_set_collision_check_limit(void *verifier, uint64_t collision_check_limit)
+{
+    struct verifier *v = verifier;
+    v->collision_check_limit = collision_check_limit;
+}
+
+void verifier_set_collision_detection(void *verifier, int enabled)
+{
+    struct verifier *v = verifier;
+    v->collision_detection_disabled = !enabled;
+}
+
+static struct per_cycle_measurements measure_at_current_cycle(struct verifier *v, struct solution *solution, struct board *board, bool check_completion);
+static int lookup_per_cycle_metric(const struct per_cycle_measurements *measurements, const char *metric, struct error *error);
+
+static void verifier_sync_advance_state(struct verifier *v)
+{
+    free(v->output_intervals);
+    v->output_intervals = 0;
+    v->number_of_output_intervals = 0;
+    v->output_intervals_repeat_after = -1;
+    if (!v->adv_board)
+        return;
+    uint64_t n = v->adv_board->number_of_output_cycles;
+    if (n > 0) {
+        v->output_intervals = calloc((size_t)n, sizeof(int));
+        for (uint64_t i = 0; i < n; ++i)
+            v->output_intervals[i] = (int)v->adv_board->output_cycles[i];
+        v->number_of_output_intervals = (int)n;
+        if (v->adv_converged) {
+            for (int i = 0; i < v->number_of_output_intervals; ++i)
+                if (v->output_intervals[i] > v->adv_steady.outputs_repeat_after_cycle) {
+                    v->output_intervals_repeat_after = i;
+                    break;
+                }
+        }
+        int last = 0;
+        for (int i = 0; i < v->number_of_output_intervals; ++i) {
+            int delta = v->output_intervals[i] - last;
+            last = v->output_intervals[i];
+            v->output_intervals[i] = delta;
+        }
+    }
+}
+
+void verifier_advance(void *verifier, int additional_cycles)
+{
+    struct verifier *v = verifier;
+    if (!v || !v->pf || !v->sf)
+        return;
+    if (additional_cycles < 0)
+        additional_cycles = 0;
+    if (!v->adv_started) {
+        v->adv_solution = calloc(1, sizeof(struct solution));
+        v->adv_board = calloc(1, sizeof(struct board));
+        if (!decode_solution(v->adv_solution, v->pf, v->sf, &v->error.description)) {
+            v->error.source = verifier_error_source_solution_file;
+            v->adv_started = true;
+            verifier_sync_advance_state(v);
+            return;
+        }
+        initial_setup(v->adv_solution, v->adv_board, v->sf->area);
+        if (!v->disable_limits)
+            v->adv_board->collision_check_limit = v->collision_check_limit;
+        v->adv_board->fails_on_wrong_output_mask = v->fails_on_wrong_output_mask;
+        v->adv_board->fails_on_wrong_output_bonds_mask = v->fails_on_wrong_output_bonds_mask;
+        v->adv_started = true;
+    }
+    v->adv_board->collision_detection_disabled = v->collision_detection_disabled;
+    if (v->adv_board->collision || v->adv_converged)
+        return;
+    if (!v->adv_run)
+        v->adv_run = steady_state_run_create();
+    uint64_t target_cycle = v->adv_board->cycle + (uint64_t)additional_cycles;
+    struct steady_state ss = run_until_steady_state(v->adv_solution, v->adv_board, target_cycle, v->adv_run);
+    if (v->adv_board->collision) {
+        v->error.description = v->adv_board->collision_reason;
+        v->error.cycle = (int)v->adv_board->cycle;
+        v->error.location_u = (int)v->adv_board->collision_location.u;
+        v->error.location_v = (int)v->adv_board->collision_location.v;
+        v->error.source = verifier_error_source_simulation;
+    } else if (ss.eventual_behavior == EVENTUALLY_ENTERS_STEADY_STATE) {
+        v->adv_converged = true;
+        v->adv_steady = ss;
+    }
+    verifier_sync_advance_state(v);
+}
+
+int verifier_current_cycle(void *verifier)
+{
+    struct verifier *v = verifier;
+    if (!v || !v->adv_board)
+        return 0;
+    return (int)v->adv_board->cycle;
+}
+
+int verifier_completed(void *verifier)
+{
+    struct verifier *v = verifier;
+    if (!v || !v->adv_board)
+        return 0;
+    return v->adv_board->complete ? 1 : 0;
+}
+
+int verifier_converged(void *verifier)
+{
+    struct verifier *v = verifier;
+    return v && v->adv_converged ? 1 : 0;
+}
+
+double verifier_measure_current(void *verifier, const char *metric)
+{
+    struct verifier *v = verifier;
+    if (!v || !v->adv_board)
+        return -1;
+    struct per_cycle_measurements m = measure_at_current_cycle(v, v->adv_solution, v->adv_board, false);
+    if (m.error.description) {
+        v->error = m.error;
+        return -1;
+    }
+    struct error e = { 0 };
+    int value = lookup_per_cycle_metric(&m, metric, &e);
+    if (e.description) {
+        v->error = e;
+        return -1;
+    }
+    return value;
 }
 
 void verifier_disable_limits(void *verifier)
@@ -611,7 +754,8 @@ static struct throughput_measurements measure_throughput(struct verifier *v)
         board.collision_check_limit = v->collision_check_limit;
     board.fails_on_wrong_output_mask = v->fails_on_wrong_output_mask;
     board.fails_on_wrong_output_bonds_mask = v->fails_on_wrong_output_bonds_mask;
-    struct steady_state steady_state = run_until_steady_state(&solution, &board, v->disable_limits ? UINT64_MAX : v->cycle_limit);
+    board.collision_detection_disabled = v->collision_detection_disabled;
+    struct steady_state steady_state = run_until_steady_state(&solution, &board, v->disable_limits ? UINT64_MAX : v->cycle_limit, 0);
 
     if (board.collision) {
         m.error.description = board.collision_reason;
@@ -728,6 +872,11 @@ static struct throughput_measurements measure_throughput(struct verifier *v)
 static void ensure_output_intervals(struct verifier *v)
 {
     if (v->throughput_measurements.valid)
+        return;
+    // In the incremental advance flow the interval list already mirrors the
+    // persisted advancing board; the getters must not trigger the full
+    // throughput simulation (which can run all the way to the cycle limit).
+    if (v->adv_started)
         return;
     v->throughput_measurements = measure_throughput(v);
 }
@@ -979,6 +1128,7 @@ int verifier_evaluate_metric(void *verifier, const char *metric)
         board.collision_check_limit = v->collision_check_limit;
     board.fails_on_wrong_output_mask = v->fails_on_wrong_output_mask;
     board.fails_on_wrong_output_bonds_mask = v->fails_on_wrong_output_bonds_mask;
+    board.collision_detection_disabled = v->collision_detection_disabled;
     if (!strcmp(metric, "overlap")) {
         int overlap = INT_MAX;
         if (board.overlap < INT_MAX)

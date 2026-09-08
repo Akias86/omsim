@@ -186,6 +186,8 @@ static void mark_area_and_check_board(struct collider_list *list, struct board *
 __attribute__((always_inline))
 static inline void add_collider(struct collider_list *list, struct board *board, struct collider collider)
 {
+    if (list->collision)
+        return;
     if (!list->ignore_board) {
         // multiply by 10 to capture the difference between atom/board and atom/atom collision checks.
         board->collision_checks += 7 * 10;
@@ -340,6 +342,8 @@ __attribute__((noinline))
 static void resolve_chain_atom_collisions(struct collider_list *list)
 {
     for (size_t i = 0; i < list->number_of_chain_atom_colliders; ++i) {
+        if (list->collision)
+            return;
         struct chain_atom_collider a = list->chain_atom_colliders[i];
         struct xy_vector origin_a = chain_atom_center_for_period(a, 0);
         double motion_ax = 0;
@@ -502,9 +506,23 @@ bool collision(struct solution *solution, struct board *board, float increment, 
                 number_of_chain_atom_colliders++;
         }
     }
+    size_t chain_bytes = number_of_chain_atom_colliders * sizeof(struct chain_atom_collider);
+    size_t chain_section = (chain_bytes + 7) / 8 * 8;
+    size_t collider_section = number_of_colliders * sizeof(struct collider);
+    size_t offsets_section = board->moving_atoms.length * sizeof(struct xy_vector);
+    size_t need = chain_section + collider_section + offsets_section;
+    if (need > board->collision_scratch_capacity) {
+        free(board->collision_scratch);
+        board->collision_scratch = malloc(need);
+        board->collision_scratch_capacity = need;
+    }
+    unsigned char *scratch = board->collision_scratch;
+    struct chain_atom_collider *chain_atom_collider_array = (struct chain_atom_collider *)scratch;
+    struct collider *collider_array = (struct collider *)(scratch + chain_section);
+    struct xy_vector *moving_atom_offsets = (struct xy_vector *)(scratch + chain_section + collider_section);
     struct collider_list list = {
-        .colliders = calloc(number_of_colliders, sizeof(struct collider)),
-        .chain_atom_colliders = calloc(number_of_chain_atom_colliders, sizeof(struct chain_atom_collider)),
+        .colliders = collider_array,
+        .chain_atom_colliders = chain_atom_collider_array,
         .bounding_box = empty_rect,
         .bounding_box_up_to_cursor = empty_rect,
         .collision_location = collision_location,
@@ -531,7 +549,6 @@ bool collision(struct solution *solution, struct board *board, float increment, 
     }
     size_t fixed_chain_atom_colliders = list.number_of_chain_atom_colliders;
     size_t atom_index = 0;
-    struct xy_vector *moving_atom_offsets = calloc(board->moving_atoms.length, sizeof(struct xy_vector));
     for (size_t i = 0; i < board->movements.length; ++i) {
         struct movement m = board->movements.movements[i];
         for (size_t j = 0; j < m.number_of_atoms; ++j) {
@@ -581,8 +598,12 @@ bool collision(struct solution *solution, struct board *board, float increment, 
             list.chain_atom_colliders[i].movement_collider_end = fixed_colliders;
         }
     }
+    if (list.collision)
+        return true;
     struct xy_rect fixed_bounding_box = list.bounding_box;
     for (float progress = increment; progress < 1.f; progress += increment) {
+        if (list.collision)
+            return true;
         list.bounding_box_unused = false;
         list.cursor = fixed_colliders;
         list.length = fixed_colliders;
@@ -677,8 +698,5 @@ bool collision(struct solution *solution, struct board *board, float increment, 
         // }
         // printf("],");
     }
-    free(moving_atom_offsets);
-    free(list.colliders);
-    free(list.chain_atom_colliders);
     return list.collision;
 }
