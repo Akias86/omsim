@@ -1,12 +1,12 @@
 ﻿param(
-    [string]$Puzzle = "tmp/P020.puzzle",
-    [string]$Solution = "tmp/armor-filament-6.solution",
+    [string]$Puzzle = "./test/puzzle/weeklies-2026/weeklies2026_fismmecyhmptu.puzzle",
+    [string]$Solution = "./test/solution/weeklies-2026/Week 8/bb.solution",
     [long]$Cycles = 10000,
     [int]$Repeats = 3,
     [string]$Base = "master",
-    # measure the current build with the shipped PGO profile (build/pgo.profdata)
+    # measure the current build with the shipped PGO profile (build/pgo-wasm.profdata)
     [switch]$PGO,
-    # retrain build/pgo.profdata from the test/ corpus, then (if -PGO) measure
+    # retrain build/pgo-wasm.profdata from the test/ corpus, then (if -PGO) measure
     [switch]$Train,
     # llvm-profdata matching the emsdk clang (use LLVM 21+ for emsdk 4.x)
     [string]$ProfdataExe = "",
@@ -33,9 +33,9 @@ try {
         & node build/train.js
         if ($LASTEXITCODE) { throw "training run failed" }
         # powershell 5.1 splits `-output=x` style arguments; go through cmd
-        cmd /c "`"$ProfdataExe`" merge -output=build/pgo.profdata build/train.profraw"
+        cmd /c "`"$ProfdataExe`" merge -output=build/pgo-wasm.profdata build/train.profraw"
         if ($LASTEXITCODE) { throw "profdata merge failed" }
-        Write-Host "PGO profile written to build/pgo.profdata"
+        Write-Host "PGO profile written to build/pgo-wasm.profdata"
         Remove-Item build/train.profraw -ErrorAction SilentlyContinue
         if (-not $PGO) { return }
     }
@@ -44,8 +44,8 @@ try {
     # (-gseparate-dwarf keeps binaryen's slower postlink passes out)
     $currentFlags = "-O3 -flto -gseparate-dwarf -DNDEBUG"
     if ($PGO) {
-        if (-not (Test-Path "build/pgo.profdata")) { throw "build/pgo.profdata missing; run with -Train first" }
-        $currentFlags = "$currentFlags -fprofile-instr-use=build/pgo.profdata"
+        if (-not (Test-Path "build/pgo-wasm.profdata")) { throw "build/pgo-wasm.profdata missing; run with -Train first" }
+        $currentFlags = "$currentFlags -fprofile-instr-use=build/pgo-wasm.profdata"
     }
     $pgolabel = if ($PGO) { " + PGO" } else { "" }
 

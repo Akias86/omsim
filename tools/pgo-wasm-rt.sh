@@ -5,8 +5,8 @@
 # Usage:  ./tools/pgo-wasm-rt.sh   (emcc + git on PATH; network required once)
 #
 # The archive is written to build/libclang_rt.profile-emscripten.a; the wasm
-# PGO flow (run.ps1 -Train, or the manual recipe in the Makefile comments)
-# links it into instrumented builds.
+# PGO flow (benchmark.ps1 -Train / benchmark.sh --train, or the manual
+# recipe in the Makefile comments) links it into instrumented builds.
 #
 # Pin to the same LLVM major as the emsdk clang (emsdk 4.x -> LLVM 21).
 set -e

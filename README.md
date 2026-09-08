@@ -40,22 +40,27 @@ bytes, evaluate metrics, inspect errors/output intervals, ...). Key extensions:
 ## PGO
 
 Clang-only (gcc uses different flags). The profile is tied to the source
-revision — retrain after any source change.
+revision and the test/ corpus — `make pgo` / `make pgo-wasm` retrain
+automatically when either changes (unix; on Windows retrain manually).
 
 ```sh
 make pgo                              # native: retrain on test/ corpus, rebuild PGO .so
-make pgo-rt                           # wasm: build the profile runtime emsdk lacks
-make PGO=1 PROFDATA=build/pgo.profdata build/libverify.wasm   # wasm PGO build
+make pgo-wasm                         # wasm: retrain under node, rebuild PGO libverify.wasm
 ```
 
 `LLVMPROFDATA` is auto-detected (`llvm-profdata` / `xcrun -f llvm-profdata`);
 override if the installed version cannot read the profile format written by your
 clang (must match the compiler major version).
 
+`pgo-wasm` needs the emsdk environment sourced (`source .../emsdk_env.sh`) so
+emcc and node are on PATH; on first use it builds the profile runtime archive
+emsdk does not ship (tools/pgo-wasm-rt.sh, needs git + network once).
+
 ## Benchmark
 
-`tools/run.ps1` compares baseline vs current, with optional
-`-PGO -Train` (retrain from the test/ corpus and measure the PGO build).
+`tools/benchmark.ps1` (Windows) / `tools/benchmark.sh` (unix, needs the emsdk
+environment) compare baseline vs current, with optional `-PGO -Train` /
+`--pgo --train` (retrain from the test/ corpus and measure the PGO build).
 
 ## Known issues
 
