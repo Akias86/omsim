@@ -1,39 +1,64 @@
-to use, try
+# omsim
 
-  make run-tests && ./run-tests
+A C simulator for Opus Magnum `.solution` / `.puzzle` files, with an FFI-oriented
+verifier API for bots and tooling.
 
-to run some tests, or
+## Build
 
-  make omsim && ./omsim <path to .puzzle> <path to .solution>
+All artifacts go to `build/`. Requires a C11 compiler (clang/gcc); the wasm
+build needs emscripten.
 
-to simulate a particular solution. also,
+```sh
+make build/omsim                 # CLI: simulate a puzzle/solution pair
+make build/libverify.so          # shared library for FFI (macOS/Linux)
+make build/libverify.dll         # Windows DLL
+make build/libverify.wasm        # Emscripten build (exports the verifier API)
+make build/run-tests             # validate test/ corpus against recorded metrics
+make build/llvm-fuzz             # libFuzzer harness for decode robustness
+```
 
-  make libverify.so
+Usage:
 
-builds a shared library with an API designed for bots to use (see verifier.h for
-documentation).
+```sh
+./build/omsim -p <puzzle.puzzle> -f <solution.solution>   # or pass paths directly
+```
 
-the following aren't implemented yet:
-- "spooky action at a distance" via conduit cloning
+`-march=native` is on by default; override with `make NATIVE=`.
 
-the following issues are known:
-- track reset is different from the game in certain situations (see
-  test/not-working-yet/overlapping-track-reset)
+## Verifier API
 
-these lists should get shorter over time. feel free to file github issues for
-any other bugs you find!
+`libverify.*` exposes the API documented in `verifier.h` (create by file or
+bytes, evaluate metrics, inspect errors/output intervals, ...). Key extensions:
 
-thanks to:
-- grimy for documentation on sub-cycle ordering
-  (at https://github.com/Grimy/om_overlap/blob/master/README.md)
-- luna for documentation on collision detection
-  (at https://gist.github.com/l-Luna/22a2595755f11d2acf0409f755cea9bb)
-- jinyou for the solution archive
-  (at http://jinyou.byethost5.com/)
-- rebix and brothermojo for transcribing the in-game puzzles into .puzzle files
-  (see test/solutions folder)
-- kotritrona for the puzzle editor
-  (at https://kotritrona.github.io/opusmagnum-puzzle-editor/ompuzzle.html)
-- f43nd1r for omsp, which was helpful for understanding solution/puzzle files
-  (at https://github.com/F43nd1r/omsp)
-- syx for gathering data on production cabinet geometry
+- `verifier_set_collision_detection(v, 0|1)` — disable the motion-phase
+  collision sweep at runtime. Much faster; only valid for solutions that do not
+  collide (results may diverge otherwise).
+- `verifier_advance(v, n)` / `verifier_current_cycle` / `verifier_completed` /
+  `verifier_converged` / `verifier_measure_current` — incremental, resumable
+  simulation for interactive UIs.
+
+## PGO
+
+Clang-only (gcc uses different flags). The profile is tied to the source
+revision — retrain after any source change.
+
+```sh
+make pgo                              # native: retrain on test/ corpus, rebuild PGO .so
+make pgo-rt                           # wasm: build the profile runtime emsdk lacks
+make PGO=1 PROFDATA=build/pgo.profdata build/libverify.wasm   # wasm PGO build
+```
+
+`LLVMPROFDATA` is auto-detected (`llvm-profdata` / `xcrun -f llvm-profdata`);
+override if the installed version cannot read the profile format written by your
+clang (must match the compiler major version).
+
+## Benchmark
+
+`benchmark/run.ps1` compares baseline vs current, with optional
+`-PGO -Train` (retrain from the test/ corpus and measure the PGO build).
+
+## Known issues
+
+- "Spooky action at a distance" via conduit cloning is not implemented.
+- Track reset differs from the game in certain situations (see
+  `test/not-working-yet/overlapping-track-reset`).

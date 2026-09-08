@@ -393,7 +393,7 @@ static atom *lookup_atom_at_height(struct board *board, struct atom_ref_at_posit
     }
 
     // this point is only reachable if something went wrong earlier
-    assert(board->collision);
+    assert(board->collision || board->collision_detection_disabled);
     return 0;
 }
 
@@ -1239,47 +1239,48 @@ static void perform_arm_instructions(struct solution *solution, struct board *bo
     }
     // carry out deferred movements.
     if (board->half_cycle == 2) {
-        // report a collision if any static arm is grabbing a moving atom
-        for (uint32_t i = 0; i < n; ++i) {
-            struct mechanism *m = &solution->arms[i];
-            if (board->cycle < (uint64_t)solution->arm_tape_start_cycle[i])
-                continue;
-            // check whether the arm is static on this cycle.
-            if (m->type & MOVED_GRABBED_ATOMS)
-                continue;
-            int step = angular_distance_between_grabbers(m->type);
-            for (int direction = 0; direction < 6; direction += step) {
-                if (!(m->type & (GRABBING_LOW_BIT << direction)))
-                    continue;
-                struct vector offset = u_offset_for_direction(direction);
-                struct vector pos = mechanism_relative_position(*m, offset.u, offset.v, 1);
-                atom *a = lookup_atom(board, pos);
-                if ((*a & VALID) && (*a & REMOVED) && (*a & MOVED))
-                    report_collision(board, pos, "atom moved while being held stationary by another arm");
-            }
-        }
-
         size_t atom_index = 0;
+        if (!board->collision_detection_disabled) {
+            // report a collision if any static arm is grabbing a moving atom
+            for (uint32_t i = 0; i < n; ++i) {
+                struct mechanism *m = &solution->arms[i];
+                if (board->cycle < (uint64_t)solution->arm_tape_start_cycle[i])
+                    continue;
+                // check whether the arm is static on this cycle.
+                if (m->type & MOVED_GRABBED_ATOMS)
+                    continue;
+                int step = angular_distance_between_grabbers(m->type);
+                for (int direction = 0; direction < 6; direction += step) {
+                    if (!(m->type & (GRABBING_LOW_BIT << direction)))
+                        continue;
+                    struct vector offset = u_offset_for_direction(direction);
+                    struct vector pos = mechanism_relative_position(*m, offset.u, offset.v, 1);
+                    atom *a = lookup_atom(board, pos);
+                    if ((*a & VALID) && (*a & REMOVED) && (*a & MOVED))
+                        report_collision(board, pos, "atom moved while being held stationary by another arm");
+                }
+            }
 
-        // sort movements by number of atoms to make the collision bounding box
-        // optimization work better.  this has to be done before fixing up the
-        // chain atom list pointers.
-        qsort(board->movements.movements, board->movements.length, sizeof(struct movement), compare_movements_by_number_of_atoms);
-        size_t offset = board->moving_atoms.length;
-        if (offset * 2 > board->moving_atoms.capacity) {
-            board->moving_atoms.capacity = offset * 2;
-            board->moving_atoms.atoms_at_positions = realloc(board->moving_atoms.atoms_at_positions, sizeof(struct atom_at_position) * board->moving_atoms.capacity);
-        }
-        memcpy(board->moving_atoms.atoms_at_positions + offset, board->moving_atoms.atoms_at_positions, sizeof(struct atom_at_position) * offset);
-        for (size_t i = 0; i < board->movements.length; ++i) {
-            struct movement *m = &board->movements.movements[i];
-            memcpy(board->moving_atoms.atoms_at_positions + atom_index, board->moving_atoms.atoms_at_positions + offset + m->first_atom_index, m->number_of_atoms * sizeof(struct atom_at_position));
-            m->first_atom_index = atom_index;
-            atom_index += m->number_of_atoms;
+            // sort movements by number of atoms to make the collision bounding box
+            // optimization work better.  this has to be done before fixing up the
+            // chain atom list pointers.
+            qsort(board->movements.movements, board->movements.length, sizeof(struct movement), compare_movements_by_number_of_atoms);
+            size_t offset = board->moving_atoms.length;
+            if (offset * 2 > board->moving_atoms.capacity) {
+                board->moving_atoms.capacity = offset * 2;
+                board->moving_atoms.atoms_at_positions = realloc(board->moving_atoms.atoms_at_positions, sizeof(struct atom_at_position) * board->moving_atoms.capacity);
+            }
+            memcpy(board->moving_atoms.atoms_at_positions + offset, board->moving_atoms.atoms_at_positions, sizeof(struct atom_at_position) * offset);
+            for (size_t i = 0; i < board->movements.length; ++i) {
+                struct movement *m = &board->movements.movements[i];
+                memcpy(board->moving_atoms.atoms_at_positions + atom_index, board->moving_atoms.atoms_at_positions + offset + m->first_atom_index, m->number_of_atoms * sizeof(struct atom_at_position));
+                m->first_atom_index = atom_index;
+                atom_index += m->number_of_atoms;
+            }
+            atom_index = 0;
         }
 
         int32_t maximum_rotation_distance = 1;
-        atom_index = 0;
         // this is kind of terrible.  we have to fix up the movement structs to
         // look like the game is expecting (instead of the initial state, before
         // the movement, the game expects to see the final state, after the
@@ -1400,22 +1401,29 @@ static void perform_arm_instructions(struct solution *solution, struct board *bo
 static void mark_arm_area(struct solution *solution, struct board *board)
 {
     // xx definitely do this in a cleaner way...
+    bool production = solution->production;
     for (size_t i = 0; i < solution->number_of_arms; ++i) {
         struct mechanism *m = &solution->arms[i];
         int step = angular_distance_between_grabbers(m->type);
         for (int direction = 0; direction < 6; direction += step) {
             struct vector offset = u_offset_for_direction(direction);
-            if (solution->production && cabinet_for_position(solution, mechanism_relative_position(*m, offset.u, offset.v, 1)) == 255)
-                report_collision(board, mechanism_relative_position(*m, offset.u, offset.v, 1), "grabber went outside cabinet wall");
+            struct vector p = mechanism_relative_position(*m, offset.u, offset.v, 1);
+            if (production && cabinet_for_position(solution, p) == 255)
+                report_collision(board, p, "grabber went outside cabinet wall");
             struct vector saved_u = m->direction_u;
             struct vector saved_v = m->direction_v;
             while (true) {
-                struct vector p = mechanism_relative_position(*m, offset.u, offset.v, 1);
                 mark_used_area(board, p);
                 if (vectors_equal(m->direction_u, zero_vector))
                     break;
+                // shortening the mechanism's axes by one hex maps to moving p
+                // by the same (axis delta) x (grabber offset) combination.
+                struct vector old_u = m->direction_u;
+                struct vector old_v = m->direction_v;
                 adjust_axis_magnitude(&m->direction_u, -1);
                 adjust_axis_magnitude(&m->direction_v, -1);
+                p.u += offset.u * (m->direction_u.u - old_u.u) + offset.v * (m->direction_v.u - old_v.u);
+                p.v += offset.u * (m->direction_u.v - old_u.v) + offset.v * (m->direction_v.v - old_v.v);
             }
             m->direction_u = saved_u;
             m->direction_v = saved_v;
@@ -2366,7 +2374,7 @@ static atom *lookup_topmost_atom(struct board *board, struct atom_at_position *a
             return &board->overlapped_atoms[i].atom;
     }
     // atom tagged OVERLAPS_ATOMS, but there’s no atom above it? something went wrong
-    assert(board->collision);
+    assert(board->collision || board->collision_detection_disabled);
     return &a->atom;
 }
 
@@ -2377,7 +2385,14 @@ atom *lookup_atom_in_grid(struct atom_grid *grid, struct vector query)
 
 static atom mark_used_area_with_overlap(struct board *board, struct vector point, uint64_t *overlap)
 {
-    struct atom_at_position *a = lookup_atom_at_position(&board->grid, point);
+    struct atom_grid *grid = &board->grid;
+    struct atom_at_position *a;
+    if (grid->hash_capacity != 0
+            && point.u >= GRID_ARRAY_MIN && point.u < GRID_ARRAY_MAX
+            && point.v >= GRID_ARRAY_MIN && point.v < GRID_ARRAY_MAX)
+        a = &grid->atoms_at_positions[(point.u - GRID_ARRAY_MIN) * (GRID_ARRAY_MAX - GRID_ARRAY_MIN) + point.v - GRID_ARRAY_MIN];
+    else
+        a = lookup_atom_at_position(grid, point);
     if (a->atom & VALID) {
         if (overlap && !(a->atom & VISITED))
             (*overlap)++;
