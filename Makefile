@@ -79,26 +79,52 @@ clean:
 # with e.g. `make pgo LLVMPROFDATA="xcrun -f llvm-profdata"`.  run plain
 # `make pgo` (not PGO=1 pgo).
 # PGO is tied to the source revision: after changing any simulator source,
-# retrain.  wasm PGO additionally needs `make pgo-rt` once (see below).
+# retrain.
 ifeq ($(OS),Windows_NT)
 LLVMPROFDATA ?= llvm-profdata
 else
 LLVMPROFDATA ?= $(shell command -v llvm-profdata 2>/dev/null || xcrun -f llvm-profdata 2>/dev/null || echo llvm-profdata)
 endif
+NODE ?= node
+# training corpus: adding or changing test data retrains the profile on the
+# next `make pgo` / `make pgo-wasm`.  (unix only -- Windows find.exe does not
+# speak POSIX; retrain manually there.  the sed escaping is how make copes
+# with spaces in corpus paths like "Week 8")
+ifeq ($(OS),Windows_NT)
+CORPUS=
+else
+CORPUS=$(shell find test -type f \( -name '*.puzzle' -o -name '*.solution' \) 2>/dev/null | sed 's/ /\\ /g')
+endif
 
-.PHONY: pgo pgo-rt
+.PHONY: pgo pgo-wasm
 pgo: $(BUILD_DIR)/pgo.profdata
 	$(CC) $(CFLAGS) $(NATIVE) -g -fprofile-instr-use=$(BUILD_DIR)/pgo.profdata -shared -fpic -o $(BUILD_DIR)/libverify.so $(SOURCE) $(LDLIBS)
 
-# build the wasm profile runtime archive that emsdk does not ship
-# (scripts the compiler-rt build; needs emcc + git + network, pinned to LLVM 21)
-pgo-rt:
+# wasm PGO automation: `make pgo-wasm` retrains the profile from the test/
+# corpus with a wasm trainer running under node (ON+OFF passes over every
+# solution) and then rebuilds the PGO-optimized libverify.wasm with it.
+# needs the emsdk environment sourced (`source .../emsdk_env.sh`) for emcc
+# and node.  the profile runtime archive that emsdk does not ship is built
+# on first use by tools/pgo-wasm-rt.sh (needs git + network once, pinned to
+# LLVM 21; works with emsdk 5 / LLVM 22 clang too).
+$(BUILD_DIR)/libclang_rt.profile-emscripten.a:
 	sh ./tools/pgo-wasm-rt.sh
 
-$(BUILD_DIR)/train-native: $(HEADER) $(SOURCE) tools/train.c Makefile | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(NATIVE) -DNDEBUG -fprofile-instr-generate=$(BUILD_DIR)/train.profraw -D_DEFAULT_SOURCE -I. $(SOURCE) tools/train.c -o $@
+$(BUILD_DIR)/train-wasm.js: $(HEADER) $(SOURCE) tools/train.c Makefile $(BUILD_DIR)/libclang_rt.profile-emscripten.a | $(BUILD_DIR)
+	emcc $(CFLAGS) -DNDEBUG -D_DEFAULT_SOURCE -I. -fprofile-instr-generate=$(BUILD_DIR)/train-wasm.profraw -sEXIT_RUNTIME=1 -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 $(SOURCE) tools/train.c $(BUILD_DIR)/libclang_rt.profile-emscripten.a -o $@
 
-$(BUILD_DIR)/pgo.profdata: $(BUILD_DIR)/train-native
+$(BUILD_DIR)/pgo-wasm.profdata: $(BUILD_DIR)/train-wasm.js $(CORPUS)
+	-rm -f $(BUILD_DIR)/train-wasm.profraw
+	$(NODE) $<
+	$(LLVMPROFDATA) merge -output=$@ $(BUILD_DIR)/train-wasm.profraw
+
+pgo-wasm: $(BUILD_DIR)/pgo-wasm.profdata
+	emcc $(CFLAGS) $(EMFLAGS) -fprofile-instr-use=$(BUILD_DIR)/pgo-wasm.profdata -gseparate-dwarf -s EXPORTED_FUNCTIONS=$(EMEXPORTS) -o $(BUILD_DIR)/libverify.wasm $(SOURCE)
+
+$(BUILD_DIR)/train-native: $(HEADER) $(SOURCE) tools/train.c Makefile | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(NATIVE) -DNDEBUG -fprofile-instr-generate=$(BUILD_DIR)/train.profraw -D_DEFAULT_SOURCE -I. $(SOURCE) tools/train.c -o $@ $(LDLIBS)
+
+$(BUILD_DIR)/pgo.profdata: $(BUILD_DIR)/train-native $(CORPUS)
 	-rm -f $(BUILD_DIR)/train.profraw
 	./$(BUILD_DIR)/train-native
 	$(LLVMPROFDATA) merge -output=$@ $(BUILD_DIR)/train.profraw
