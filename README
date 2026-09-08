@@ -54,7 +54,7 @@ clang (must match the compiler major version).
 
 ## Benchmark
 
-`benchmark/run.ps1` compares baseline vs current, with optional
+`tools/run.ps1` compares baseline vs current, with optional
 `-PGO -Train` (retrain from the test/ corpus and measure the PGO build).
 
 ## Known issues

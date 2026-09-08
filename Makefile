@@ -73,7 +73,7 @@ clean:
 	-rm -rf $(BUILD_DIR)
 
 # native PGO automation: `make pgo` retrains the profile from the test/
-# corpus (ON+OFF passes over every solution, see benchmark/train.c) and then
+# corpus (ON+OFF passes over every solution, see tools/train.c) and then
 # rebuilds the PGO-optimized shared library with it.  needs llvm-profdata
 # matching the native clang (clang-only; gcc uses different flags), override
 # with e.g. `make pgo LLVMPROFDATA="xcrun -f llvm-profdata"`.  run plain
@@ -95,8 +95,8 @@ pgo: $(BUILD_DIR)/pgo.profdata
 pgo-rt:
 	sh ./tools/pgo-wasm-rt.sh
 
-$(BUILD_DIR)/train-native: $(HEADER) $(SOURCE) benchmark/train.c Makefile | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(NATIVE) -DNDEBUG -fprofile-instr-generate=$(BUILD_DIR)/train.profraw -D_DEFAULT_SOURCE -I. $(SOURCE) benchmark/train.c -o $@
+$(BUILD_DIR)/train-native: $(HEADER) $(SOURCE) tools/train.c Makefile | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(NATIVE) -DNDEBUG -fprofile-instr-generate=$(BUILD_DIR)/train.profraw -D_DEFAULT_SOURCE -I. $(SOURCE) tools/train.c -o $@
 
 $(BUILD_DIR)/pgo.profdata: $(BUILD_DIR)/train-native
 	-rm -f $(BUILD_DIR)/train.profraw
