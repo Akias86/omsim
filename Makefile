@@ -103,12 +103,18 @@ pgo: $(BUILD_DIR)/pgo.profdata
 # wasm PGO automation: `make pgo-wasm` retrains the profile from the test/
 # corpus with a wasm trainer running under node (ON+OFF passes over every
 # solution) and then rebuilds the PGO-optimized libverify.wasm with it.
-# needs the emsdk environment sourced (`source .../emsdk_env.sh`) for emcc
-# and node.  the profile runtime archive that emsdk does not ship is built
-# on first use by tools/pgo-wasm-rt.sh (needs git + network once, pinned to
-# LLVM 21; works with emsdk 5 / LLVM 22 clang too).
+# needs the emsdk environment sourced (`source .../emsdk_env.sh` / `emsdk_env.bat`)
+# for emcc and node.  the profile runtime archive that emsdk does not ship is
+# built on first use by tools/pgo-wasm-rt.sh (unix) / .ps1 (Windows); needs
+# git + network once, pinned to LLVM 21 (works with emsdk 5 / LLVM 22 too).
+ifeq ($(OS),Windows_NT)
+PGO_RT_CMD = powershell -ExecutionPolicy Bypass -File tools/pgo-wasm-rt.ps1
+else
+PGO_RT_CMD = sh ./tools/pgo-wasm-rt.sh
+endif
+
 $(BUILD_DIR)/libclang_rt.profile-emscripten.a:
-	sh ./tools/pgo-wasm-rt.sh
+	$(PGO_RT_CMD)
 
 $(BUILD_DIR)/train-wasm.js: $(HEADER) $(SOURCE) tools/train.c Makefile $(BUILD_DIR)/libclang_rt.profile-emscripten.a | $(BUILD_DIR)
 	emcc $(CFLAGS) -DNDEBUG -D_DEFAULT_SOURCE -I. -fprofile-instr-generate=$(BUILD_DIR)/train-wasm.profraw -sEXIT_RUNTIME=1 -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 $(SOURCE) tools/train.c $(BUILD_DIR)/libclang_rt.profile-emscripten.a -o $@
