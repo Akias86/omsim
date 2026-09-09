@@ -113,6 +113,15 @@ else
 PGO_RT_CMD = sh ./tools/pgo-wasm-rt.sh
 endif
 
+# merge a profraw into $(BUILD_DIR)/pgo*.profdata, with a hint on failure for
+# the common llvm-profdata/clang version mismatch (profile raw v10 from
+# clang 21 needs an LLVM >= 21 tool).  $(call PROFDATA_MERGE,<profraw>).
+ifeq ($(OS),Windows_NT)
+PROFDATA_MERGE = $(LLVMPROFDATA) merge -output=$@ $(1) || (echo "error: profile merge failed -- LLVMPROFDATA too old for the raw profile (v10 needs LLVM >= 21); retry with LLVMPROFDATA=<path-to-llvm-21-plus-llvm-profdata>" 1>&2 & exit 1)
+else
+PROFDATA_MERGE = $(LLVMPROFDATA) merge -output=$@ $(1) || (echo "error: profile merge failed -- LLVMPROFDATA too old for the raw profile (v10 needs LLVM >= 21); retry with LLVMPROFDATA=<path-to-llvm-21-plus-llvm-profdata>" 1>&2; exit 1)
+endif
+
 $(BUILD_DIR)/libclang_rt.profile-emscripten.a:
 	$(PGO_RT_CMD)
 
@@ -122,7 +131,7 @@ $(BUILD_DIR)/train-wasm.js: $(HEADER) $(SOURCE) tools/train.c Makefile $(BUILD_D
 $(BUILD_DIR)/pgo-wasm.profdata: $(BUILD_DIR)/train-wasm.js $(CORPUS)
 	-rm -f $(BUILD_DIR)/train-wasm.profraw
 	$(NODE) $<
-	$(LLVMPROFDATA) merge -output=$@ $(BUILD_DIR)/train-wasm.profraw
+	$(call PROFDATA_MERGE,$(BUILD_DIR)/train-wasm.profraw)
 
 pgo-wasm: $(BUILD_DIR)/pgo-wasm.profdata
 	emcc $(CFLAGS) $(EMFLAGS) -fprofile-instr-use=$(BUILD_DIR)/pgo-wasm.profdata -gseparate-dwarf -s EXPORTED_FUNCTIONS=$(EMEXPORTS) -o $(BUILD_DIR)/libverify.wasm $(SOURCE)
@@ -133,4 +142,4 @@ $(BUILD_DIR)/train-native: $(HEADER) $(SOURCE) tools/train.c Makefile | $(BUILD_
 $(BUILD_DIR)/pgo.profdata: $(BUILD_DIR)/train-native $(CORPUS)
 	-rm -f $(BUILD_DIR)/train.profraw
 	./$(BUILD_DIR)/train-native
-	$(LLVMPROFDATA) merge -output=$@ $(BUILD_DIR)/train.profraw
+	$(call PROFDATA_MERGE,$(BUILD_DIR)/train.profraw)

@@ -48,9 +48,16 @@ make pgo                              # native: retrain on test/ corpus, rebuild
 make pgo-wasm                         # wasm: retrain under node, rebuild PGO libverify.wasm
 ```
 
-`LLVMPROFDATA` is auto-detected (`llvm-profdata` / `xcrun -f llvm-profdata`);
-override if the installed version cannot read the profile format written by your
-clang (must match the compiler major version).
+`LLVMPROFDATA` is auto-detected (`llvm-profdata` / `xcrun -f llvm-profdata`),
+but the detected tool must match the compiler that wrote the profile: emsdk
+4.x uses clang 21, which writes raw profile format v10 — an older
+`llvm-profdata` (e.g. an LLVM 18 install) cannot merge it.  If merging fails
+with "raw profile version mismatch", point `LLVMPROFDATA` at a tool with the
+same major version as your compiler:
+
+```sh
+make pgo-wasm LLVMPROFDATA=/path/to/llvm-profdata   # any LLVM >= 21
+```
 
 `pgo-wasm` needs the emsdk environment sourced (`source .../emsdk_env.sh`) so
 emcc and node are on PATH; on first use it builds the profile runtime archive
