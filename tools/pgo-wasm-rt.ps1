@@ -5,6 +5,7 @@
 #
 # Needs: emcc + git on PATH (activate emsdk first); network required once.
 $ErrorActionPreference = "Stop"
+# fallback pin when the compiler revision cannot be auto-detected
 $TAG = "llvmorg-21.1.0"
 $ROOT = Split-Path $PSScriptRoot -Parent
 $BUILD = Join-Path $ROOT "build"
@@ -16,14 +17,41 @@ if (-not (Get-Command emcc -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+# resolve the emsdk clang (sits next to emcc under upstream/) and read the
+# LLVM revision it was built from: the runtime must match the instrumenting
+# compiler, a raw-profile format mismatch crashes at profile write and the
+# profraw will not merge with the bundled llvm-profdata
+$clang = Join-Path (Split-Path (Get-Command emcc).Source -Parent) "..\bin\clang.exe"
+if (-not (Test-Path $clang)) {
+    $c = Get-Command clang -ErrorAction SilentlyContinue
+    if ($c) { $clang = $c.Source }
+}
+$REV = $null
+if ($clang -and (Test-Path $clang)) {
+    $v = (& $clang --version) -join " "
+    if ($v -match "llvm-project[ ]+([0-9a-f]{40})") { $REV = $Matches[1] }
+}
+if (-not $REV) { Write-Host "could not detect the emsdk clang revision, falling back to $TAG" }
+$PIN = if ($REV) { $REV } else { $TAG }
+
 New-Item -ItemType Directory -Force -Path $BUILD | Out-Null
-$stamp = Join-Path $BUILD ".pgo-rt-cloned-$TAG"
+$stamp = Join-Path $BUILD ".pgo-rt-cloned-$PIN"
 if (-not (Test-Path $stamp)) {
     if (Test-Path $WORK) { Remove-Item -Recurse -Force $WORK }
-    git clone --depth 1 --filter=blob:none --sparse --branch $TAG https://github.com/llvm/llvm-project $WORK
+    git clone --depth 1 --filter=blob:none --sparse https://github.com/llvm/llvm-project $WORK
     if ($LASTEXITCODE) { throw "git clone failed" }
     git -C $WORK sparse-checkout set compiler-rt cmake
     if ($LASTEXITCODE) { throw "git sparse-checkout failed" }
+    if ($REV) {
+        git -C $WORK fetch --depth 1 origin $REV
+        if ($LASTEXITCODE) { throw "git fetch $REV failed" }
+    }
+    else {
+        git -C $WORK fetch --depth 1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
+        if ($LASTEXITCODE) { throw "git fetch $TAG failed" }
+    }
+    git -C $WORK checkout --detach $PIN
+    if ($LASTEXITCODE) { throw "git checkout $PIN failed" }
     New-Item -ItemType File -Force -Path $stamp | Out-Null
 }
 

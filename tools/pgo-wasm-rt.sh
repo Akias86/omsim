@@ -8,7 +8,10 @@
 # PGO flow (benchmark.ps1 -Train / benchmark.sh --train, or the manual
 # recipe in the Makefile comments) links it into instrumented builds.
 #
-# Pin to the same LLVM major as the emsdk clang (emsdk 4.x -> LLVM 21).
+# Pin to the same LLVM sources as the emsdk clang: read the revision from
+# `clang --version` so the runtime matches the instrumenting compiler (a
+# raw-profile format mismatch crashes at profile write and the profraw will
+# not merge).  Falls back to a known tag if detection fails.
 set -e
 TAG=llvmorg-21.1.0
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -21,13 +24,32 @@ if ! command -v emcc >/dev/null 2>&1; then
     exit 1
 fi
 
+CLANG="$(dirname "$(command -v emcc)")/../bin/clang"
+[ -x "$CLANG" ] || CLANG=$(command -v clang || true)
+REV=""
+if [ -n "$CLANG" ] && [ -x "$CLANG" ]; then
+    REV=$("$CLANG" --version | sed -nE 's/.*llvm-project +([0-9a-f]{40}).*/\1/p' | head -n 1)
+fi
+if [ -n "$REV" ]; then
+    PIN=$REV
+else
+    echo "could not detect the emsdk clang revision, falling back to $TAG" >&2
+    PIN=$TAG
+fi
+
 mkdir -p "$BUILD"
-if [ ! -f "$BUILD/.pgo-rt-cloned-$TAG" ]; then
+if [ ! -f "$BUILD/.pgo-rt-cloned-$PIN" ]; then
     rm -rf "$WORK"
-    git clone --depth 1 --filter=blob:none --sparse --branch "$TAG" \
+    git clone --depth 1 --filter=blob:none --sparse \
         https://github.com/llvm/llvm-project "$WORK"
     git -C "$WORK" sparse-checkout set compiler-rt cmake
-    touch "$BUILD/.pgo-rt-cloned-$TAG"
+    if [ -n "$REV" ]; then
+        git -C "$WORK" fetch --depth 1 origin "$REV"
+    else
+        git -C "$WORK" fetch --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG"
+    fi
+    git -C "$WORK" checkout --detach "$PIN"
+    touch "$BUILD/.pgo-rt-cloned-$PIN"
 fi
 
 P="$WORK/compiler-rt/lib/profile"
