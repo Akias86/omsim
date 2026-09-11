@@ -16,8 +16,8 @@
 #   --train                retrain build/pgo-wasm.profdata from the test/
 #                          corpus first (then measure, if --pgo)
 #
-# LLVMPROFDATA (default llvm-profdata) must match the emsdk clang major
-# version; only needed with --train.
+# LLVMPROFDATA defaults to the profdata bundled in $EMSDK (matching its
+# clang), else llvm-profdata on PATH; only needed with --train.
 set -e
 source /usr/bin/emsdk_env.sh
 
@@ -45,7 +45,14 @@ done
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-LLVMPROFDATA=${LLVMPROFDATA:-llvm-profdata}
+if [ -z "$LLVMPROFDATA" ]; then
+    # prefer the profdata bundled with the emsdk (matches its clang version)
+    if [ -n "$EMSDK" ] && [ -x "$EMSDK/upstream/bin/llvm-profdata" ]; then
+        LLVMPROFDATA="$EMSDK/upstream/bin/llvm-profdata"
+    else
+        LLVMPROFDATA=llvm-profdata
+    fi
+fi
 srcs="collision.c decode.c parse.c sim.c steady-state.c verifier.c"
 profdata="build/pgo-wasm.profdata"
 

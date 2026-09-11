@@ -1,7 +1,7 @@
 ﻿param(
-    [string]$Puzzle = "./test/puzzle/weeklies-2026/weeklies2026_fismmecyhmptu.puzzle",
-    [string]$Solution = "./test/solution/weeklies-2026/Week 8/bb.solution",
-    [long]$Cycles = 10000,
+    [string]$Puzzle = "tmp\P020.puzzle",
+    [string]$Solution = "tmp\armor-filament-6.solution",
+    [long]$Cycles = 50000,
     [int]$Repeats = 3,
     [string]$Base = "master",
     # measure the current build with the shipped PGO profile (build/pgo-wasm.profdata)
@@ -27,7 +27,11 @@ try {
 
     if ($Train) {
         if (-not (Test-Path $ProfileRt)) { throw "profile runtime not found: $ProfileRt" }
-        if ($ProfdataExe -eq "" -or -not (Test-Path $ProfdataExe)) { throw "set -ProfdataExe to an llvm-profdata matching the emsdk clang" }
+        if ($ProfdataExe -eq "" -and $env:EMSDK) {
+            $bundled = Join-Path $env:EMSDK "upstream\bin\llvm-profdata.exe"
+            if (Test-Path $bundled) { $ProfdataExe = $bundled }
+        }
+        if ($ProfdataExe -eq "" -or -not (Test-Path $ProfdataExe)) { throw "set -ProfdataExe to an llvm-profdata matching the emsdk clang (e.g. <emsdk>\upstream\bin\llvm-profdata.exe)" }
         Write-Host "training on test/ corpus (instrumented build)..."
         Invoke-Emcc "-O2 -DNDEBUG -fprofile-instr-generate=build/train.profraw -sEXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 -std=c11 -w -D_DEFAULT_SOURCE -I. $srcs tools/train.c $ProfileRt -o build/train.js -sNODERAWFS=1" "trainer build"
         & node build/train.js
