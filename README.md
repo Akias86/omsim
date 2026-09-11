@@ -5,16 +5,17 @@ verifier API for bots and tooling.
 
 ## Build
 
-All artifacts go to `build/`. Requires a C11 compiler (clang/gcc); the wasm
-build needs emscripten.
+All artifacts go to `build/` (`build/libverify.so`, `build/omsim.exe` on
+Windows, ...).  Requires a C11 compiler (clang/gcc); the wasm build needs
+emscripten.
 
 ```sh
-make build/omsim                 # CLI: simulate a puzzle/solution pair
-make build/libverify.so          # shared library for FFI (macOS/Linux)
-make build/libverify.dll         # Windows DLL
-make build/libverify.wasm        # Emscripten build (exports the verifier API)
-make build/run-tests             # validate test/ corpus against recorded metrics
-make build/llvm-fuzz             # libFuzzer harness for decode robustness
+make omsim                       # CLI: simulate a puzzle/solution pair
+make libverify.so                # shared library for FFI, PGO by default
+make libverify.dll               # Windows DLL, PGO by default
+make libverify.wasm              # Emscripten build, PGO by default
+make run-tests                   # validate test/ corpus against recorded metrics
+make llvm-fuzz                   # libFuzzer harness for decode robustness
 ```
 
 Usage:
@@ -39,13 +40,21 @@ bytes, evaluate metrics, inspect errors/output intervals, ...). Key extensions:
 
 ## PGO
 
-Clang-only (gcc uses different flags). The profile is tied to the source
-revision and the test/ corpus — `make pgo` / `make pgo-wasm` retrain
-automatically when either changes (unix; on Windows retrain manually).
+`libverify.so` / `libverify.dll` / `libverify.wasm` are PGO-optimized by
+default (clang-only; gcc uses different flags).  Building one first trains a
+profile by running the test/ corpus through an instrumented trainer
+(`tools/train.c` — natively, or as wasm under node for the wasm build),
+merges it with llvm-profdata, then links with `-fprofile-instr-use`.
+Everything is dependency-tracked, so from a clean tree a single
+`make libverify.so` / `make libverify.wasm` does the whole pipeline, and
+retraining happens automatically whenever the sources or the corpus change
+(unix; on Windows the corpus is not tracked — delete `build/pgo.profdata` /
+`build/pgo-wasm.profdata` to force a retrain).
 
 ```sh
-make pgo                              # native: retrain on test/ corpus, rebuild PGO .so
-make pgo-wasm                         # wasm: retrain under node, rebuild PGO libverify.wasm
+make libverify.so                 # native: train on test/ corpus, build PGO .so  (= make pgo)
+make libverify.wasm               # wasm: train under node, build PGO wasm       (= make pgo-wasm)
+make libverify.so PGO=0           # plain -O3 build, no profiling
 ```
 
 `LLVMPROFDATA` is auto-detected (`llvm-profdata` / `xcrun -f llvm-profdata`),
@@ -56,12 +65,13 @@ with "raw profile version mismatch", point `LLVMPROFDATA` at a tool with the
 same major version as your compiler:
 
 ```sh
-make pgo-wasm LLVMPROFDATA=/path/to/llvm-profdata   # any LLVM >= 21
+make libverify.wasm LLVMPROFDATA=/path/to/llvm-profdata   # any LLVM >= 21
 ```
 
-`pgo-wasm` needs the emsdk environment sourced (`source .../emsdk_env.sh`) so
-emcc and node are on PATH; on first use it builds the profile runtime archive
-emsdk does not ship (tools/pgo-wasm-rt.sh, needs git + network once).
+`make libverify.wasm` needs the emsdk environment sourced
+(`source .../emsdk_env.sh` / `emsdk_env.bat`) so emcc and node are on PATH;
+on first use it builds the profile runtime archive emsdk does not ship
+(tools/pgo-wasm-rt.sh, needs git + network once).
 
 ## Benchmark
 
